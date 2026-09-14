@@ -16,7 +16,9 @@ $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Componen
 if (!$vs) { throw 'No Visual Studio installation with C++ tools was found.' }
 # Import the compiler environment without constructing a shell command from paths.
 $devShell = Join-Path $vs 'Common7/Tools/Launch-VsDevShell.ps1'
-& $devShell -Arch $Architecture -HostArch amd64 -SkipAutomaticLocation | Out-Null
+# VS 2022 calls the x64 target amd64; keep x64 for NMAKE and MSIX.
+$compilerArchitecture = if ($Architecture -eq 'x64') { 'amd64' } else { $Architecture }
+& $devShell -Arch $compilerArchitecture -HostArch amd64 -SkipAutomaticLocation | Out-Null
 if (!(Get-Command makeappx.exe -ErrorAction SilentlyContinue)) { throw 'Windows SDK makeappx.exe is required.' }
 
 $targets = [ordered]@{
