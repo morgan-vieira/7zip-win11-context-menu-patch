@@ -1,0 +1,57 @@
+name: Build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_version:
+        description: 'Patch revision (increment for each release of this upstream version)'
+        required: true
+        default: '1'
+      publish:
+        description: 'Publish a testing prerelease (otherwise create a draft)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.patch_version }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test x64 release
+        shell: powershell
+        env:
+          PATCH_VERSION: ${{ inputs.patch_version }}
+        run: |
+          ./packaging/windows11/Release.ps1 -Architecture x64 -PatchVersion $env:PATCH_VERSION
+          [xml]$manifest = Get-Content ./out/windows11/x64/package/AppxManifest.xml
+          $v = [version]$manifest.Package.Identity.Version
+          $tag = 'v{0}.{1:00}.{2}-preview' -f $v.Major, $v.Minor, $v.Build
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+      - name: Retain release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-x64
+          path: out/releases/*
+          if-no-files-found: error
+      - name: Create GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          $assets = @(Get-ChildItem ./out/releases -File | ForEach-Object FullName)
+          $releaseArgs = @('release', 'create', $env:RELEASE_TAG,
+              '--target', $env:GITHUB_SHA, '--title', "7-Zip Windows 11 Context Menu Patch $env:RELEASE_TAG",
+              '--notes-file', './packaging/windows11/RELEASE-NOTES.md', '--prerelease')
+          if ($env:PUBLISH -ne 'true') { $releaseArgs += '--draft' }
+          & gh @releaseArgs @assets
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed; check for an existing version/tag.' }

@@ -1565,12 +1565,35 @@ static HRESULT LoadPaths(IShellItemArray *psiItemArray, UStringVector &paths)
 void CZipExplorerCommand::LoadItems(IShellItemArray *psiItemArray)
 {
   SubCommands.Clear();
+  CurrentSubCommand = 0;
   _fileNames.Clear();
+  _attribs.Clear();
   {
     UStringVector paths;
     if (LoadPaths(psiItemArray, paths) != S_OK)
       return;
     _fileNames = paths;
+  }
+  // IShellExtInit is not called for the modern menu. Obtain directory
+  // attributes from the selection so mixed file/folder selections are handled.
+  if (psiItemArray)
+  {
+    DWORD count = 0;
+    if (FAILED(psiItemArray->GetCount(&count)))
+      return;
+    for (DWORD i = 0; i < count; i++)
+    {
+      CMyComPtr<IShellItem> item;
+      SFGAOF attributes = 0;
+      if (FAILED(psiItemArray->GetItemAt(i, &item)) || !item ||
+          FAILED(item->GetAttributes(SFGAO_FOLDER, &attributes)))
+        return;
+      if (attributes & SFGAO_FOLDER)
+      {
+        _attribs.FirstDirIndex = (int)i;
+        break;
+      }
+    }
   }
   const HRESULT res = QueryContextMenu(
       NULL, // hMenu,
@@ -1582,48 +1605,40 @@ void CZipExplorerCommand::LoadItems(IShellItemArray *psiItemArray)
   if (FAILED(res))
     return /* res */;
 
-  CZipExplorerCommand *crcHandler = NULL;
-  CZipExplorerCommand *openHandler = NULL;
-
-  bool useCascadedCrc = true; // false;
-  bool useCascadedOpen = true; // false;
-
+  // Explorer supports only one level of IExplorerCommand subcommands.
+  // Flatten the legacy Open-as and checksum cascades into the 7-Zip flyout.
+  UString openTitle;
+  UString crcTitle;
   for (unsigned i = 0; i < _commandMap.Size(); i++)
   {
     const CCommandMapItem &cmi = _commandMap[i];
+    if (cmi.CtxCommandType == CtxCommandType_OpenRoot)
+      openTitle = cmi.UserString;
+    if (cmi.CtxCommandType == CtxCommandType_CrcRoot)
+      crcTitle = cmi.UserString;
+    if (cmi.IsPopup || cmi.IsSubMenu())
+      continue;
 
-    if (cmi.IsPopup)
-      if (!cmi.IsSubMenu())
-        continue;
-
-    // if (cmi.IsSubMenu()) continue // for debug
-      
     CZipContextMenu *shellExt = new CZipContextMenu();
+    CMyComPtr<IExplorerCommand> command = shellExt;
     shellExt->IsRoot = false;
-
-    if (cmi.CtxCommandType == CtxCommandType_CrcRoot && !useCascadedCrc)
-      shellExt->IsSeparator = true;
-
-    {
-      CZipExplorerCommand *handler = this;
-      if (cmi.CtxCommandType == CtxCommandType_CrcChild && crcHandler)
-        handler = crcHandler;
-      else if (cmi.CtxCommandType == CtxCommandType_OpenChild && openHandler)
-        handler = openHandler;
-      handler->SubCommands.AddNew() = shellExt;
-    }
-
+    shellExt->_writeZone = _writeZone;
+    shellExt->_elimDup = _elimDup;
+    shellExt->_attribs = _attribs;
+    shellExt->_fileNames_WereReduced = _fileNames_WereReduced;
     shellExt->_commandMap_Cur.Add(cmi);
-
-    ODS_U(cmi.UserString)
-
-    if (cmi.CtxCommandType == CtxCommandType_CrcRoot && useCascadedCrc)
-      crcHandler = shellExt;
-    if (cmi.CtxCommandType == CtxCommandType_OpenRoot && useCascadedOpen)
+    UString prefix;
+    if (cmi.CtxCommandType == CtxCommandType_OpenChild)
+      prefix = openTitle;
+    else if (cmi.CtxCommandType == CtxCommandType_CrcChild)
+      prefix = crcTitle;
+    if (!prefix.IsEmpty())
     {
-      // ODS("cmi.CtxCommandType == CtxCommandType_OpenRoot");
-      openHandler = shellExt;
+      prefix += L": ";
+      prefix += cmi.UserString;
+      shellExt->_commandMap_Cur[0].UserString = prefix;
     }
+    SubCommands.Add(command);
   }
 }
 
@@ -1631,7 +1646,7 @@ void CZipExplorerCommand::LoadItems(IShellItemArray *psiItemArray)
 Z7_COMWF_B CZipExplorerCommand::GetTitle(IShellItemArray *psiItemArray, LPWSTR *ppszName)
 {
   ODS("- GetTitle()")
- // COM_TRY_BEGIN
+  COM_TRY_BEGIN
   if (IsSeparator)
   {
     *ppszName = NULL;
@@ -1657,7 +1672,7 @@ Z7_COMWF_B CZipExplorerCommand::GetTitle(IShellItemArray *psiItemArray, LPWSTR *
 
   return My_SHStrDupW(name, ppszName);
   // return S_OK;
-  // COM_TRY_END
+  COM_TRY_END
 }
 
 
@@ -1696,16 +1711,21 @@ Z7_COMWF_B CZipExplorerCommand::GetCanonicalName(GUID *pguidCommandName)
 }
 
 
-Z7_COMWF_B CZipExplorerCommand::GetState(IShellItemArray * /* psiItemArray */, BOOL /* fOkToBeSlow */, EXPCMDSTATE *pCmdState)
+Z7_COMWF_B CZipExplorerCommand::GetState(IShellItemArray *psiItemArray, BOOL /* fOkToBeSlow */, EXPCMDSTATE *pCmdState)
 {
-  // COM_TRY_BEGIN
-  ODS("- GetState()")
-  *pCmdState = ECS_ENABLED;
+  *pCmdState = ECS_HIDDEN;
+  if (!psiItemArray)
+    return S_OK;
+  DWORD count = 0;
+  RINOK(psiItemArray->GetCount(&count))
+  if (count == 0)
+    return S_OK;
+  SFGAOF attributes = 0;
+  RINOK(psiItemArray->GetAttributes(SIATTRIBFLAGS_AND, SFGAO_FILESYSTEM, &attributes))
+  if (attributes & SFGAO_FILESYSTEM)
+    *pCmdState = ECS_ENABLED;
   return S_OK;
-  // COM_TRY_END
 }
-
-
 
 
 Z7_COMWF_B CZipExplorerCommand::Invoke(IShellItemArray *psiItemArray, IBindCtx * /* pbc */)
@@ -1719,6 +1739,8 @@ Z7_COMWF_B CZipExplorerCommand::Invoke(IShellItemArray *psiItemArray, IBindCtx *
   _fileNames.Clear();
   UStringVector paths;
   RINOK(LoadPaths(psiItemArray, paths))
+  if (paths.IsEmpty())
+    return E_INVALIDARG;
   _fileNames = paths;
   return InvokeCommandCommon(_commandMap_Cur[0]);
 
@@ -1772,7 +1794,7 @@ Z7_COMWF_B CZipExplorerCommand::EnumSubCommands(IEnumExplorerCommand **ppEnum)
     }
   }
  
-  // shellExt->
+  CurrentSubCommand = 0;
   return QueryInterface(IID_IEnumExplorerCommand, (void **)ppEnum);
 
   // return S_OK;

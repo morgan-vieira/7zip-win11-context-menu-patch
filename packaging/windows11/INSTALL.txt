@@ -1,0 +1,42 @@
+7-Zip Windows 11 Context Menu Patch - testing prerelease
+
+An independent community patch, based on upstream 7-Zip.
+Requires Windows 11 and a package matching your PC architecture.
+Includes 7-Zip; you do not need to install it separately or compile anything.
+
+INSTALL
+1. Extract all files from this ZIP into a folder.
+2. Open Windows PowerShell as administrator with your usual Windows account.
+3. Change to the extracted folder, then run:
+
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
+
+4. Right-click a file or folder in Explorer and look for the 7-Zip flyout.
+   If it does not appear, sign out and back in.
+
+This preview is unsigned. The installer uses Windows' explicit AllowUnsigned
+option, which requires administrator privileges for executable packages.
+It does not install certificates or enable Developer Mode. Organisation policy
+may prevent installation. This build is for testing, not a signed stable release.
+
+UNINSTALL
+From PowerShell under the account that installed the package:
+
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall.ps1
+
+Updating to a newer package version uses Install.ps1 again. To install a rebuilt
+package with the same version, uninstall the old one first.
+
+VERIFY DOWNLOAD
+Compare the output below with the accompanying .zip.sha256 release asset:
+
+   Get-FileHash .\<downloaded-archive-name>.zip -Algorithm SHA256
+
+BUILD.json records the source commit, whether the working tree was modified,
+the package version and the SHA256 of the enclosed MSIX.
+
+TESTING
+Build-time checks cover direct DLL activation, menu enumeration, and an archive
+round trip. They do not validate installation, packaged COM activation, Explorer
+rendering, or GUI command execution. Exercise these on a test PC and report the
+Windows build, architecture, package version, and any error message in an issue.
